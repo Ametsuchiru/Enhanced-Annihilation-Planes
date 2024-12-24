@@ -30,4 +30,5 @@ repositories {
 
 dependencies {
     implementation rfg.deobf('curse.maven:ae2-extended-life-570458:4724395')
+    implementation rfg.deobf('curse.maven:hwyla-253449:2568751')
 }

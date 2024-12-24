@@ -3,6 +3,7 @@ package io.github.ametsuchiru.enhancedannihilationplanes.mixin;
 import appeng.items.AEBaseItem;
 import appeng.items.parts.ItemPart;
 import appeng.items.parts.PartType;
+import io.github.ametsuchiru.enhancedannihilationplanes.EAPConfig;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.EnumEnchantmentType;
 import net.minecraft.item.ItemStack;
@@ -32,7 +33,7 @@ public abstract class ItemPartMixin extends AEBaseItem {
     @Override
     public int getItemEnchantability(ItemStack stack) {
         if (this.getTypeByStack(stack) == PartType.IDENTITY_ANNIHILATION_PLANE) {
-            return 10; // Diamond TODO: Configurable
+            return EAPConfig.enchantability;
         }
         return super.getItemEnchantability();
     }

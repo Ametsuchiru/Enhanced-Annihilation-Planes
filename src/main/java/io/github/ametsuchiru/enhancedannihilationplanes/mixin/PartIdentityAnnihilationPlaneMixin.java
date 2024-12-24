@@ -16,12 +16,19 @@ import appeng.me.GridAccessException;
 import appeng.parts.automation.PartAnnihilationPlane;
 import appeng.parts.automation.PartIdentityAnnihilationPlane;
 import appeng.util.Platform;
+import appeng.util.SettingsFrom;
 import appeng.util.item.AEItemStack;
+import io.github.ametsuchiru.enhancedannihilationplanes.EAPConfig;
+import io.github.ametsuchiru.enhancedannihilationplanes.EAPInterface;
+import it.unimi.dsi.fastutil.objects.Object2IntArrayMap;
 import net.minecraft.block.EAPBlockExpander;
 import net.minecraft.block.state.IBlockState;
+import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.EnchantmentHelper;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Enchantments;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumHand;
 import net.minecraft.util.math.BlockPos;
@@ -39,11 +46,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Mixin(value = PartIdentityAnnihilationPlane.class, remap = false)
-public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilationPlane {
+public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilationPlane implements EAPInterface {
 
+    @Unique private Map<Enchantment, Integer> eap$enchantments;
     @Unique private PartAnnihilationPlaneAccessor eap$accessor;
     @Unique private boolean eap$currentlyBreaking;
 
@@ -52,8 +61,18 @@ public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilatio
         throw new AssertionError();
     }
 
+    @Override
+    public NBTTagCompound eap$writeEnchantments() {
+        NBTTagCompound tag = new NBTTagCompound();
+        for (Map.Entry<Enchantment, Integer> entry : this.eap$enchantments.entrySet()) {
+            tag.setInteger(String.valueOf(Enchantment.getEnchantmentID(entry.getKey())), entry.getValue());
+        }
+        return tag;
+    }
+
     @Inject(method = "<init>", at = @At("RETURN"))
     private void afterInit(ItemStack stack, CallbackInfo ci) {
+        this.eap$enchantments = new Object2IntArrayMap<>(EnchantmentHelper.getEnchantments(stack));
         this.eap$accessor = (PartAnnihilationPlaneAccessor) this;
     }
 
@@ -64,7 +83,7 @@ public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilatio
         ItemStack prevHeldItem = fakePlayer.getHeldItem(EnumHand.MAIN_HAND);
         ItemStack stack = this.getItemStack();
         fakePlayer.setHeldItem(EnumHand.MAIN_HAND, stack);
-        if (state.getBlock().canSilkHarvest(world, pos, state, fakePlayer) && EnchantmentHelper.getEnchantmentLevel(Enchantments.SILK_TOUCH, stack) > 0) {
+        if (state.getBlock().canSilkHarvest(world, pos, state, fakePlayer) && this.eap$enchantments.containsKey(Enchantments.SILK_TOUCH)) {
             ItemStack itemstack = EAPBlockExpander.eap$getSilkTouchDrop(state);
             if (!itemstack.isEmpty()) {
                 List<ItemStack> items = new ArrayList<>();
@@ -76,7 +95,7 @@ public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilatio
             fakePlayer.setHeldItem(EnumHand.MAIN_HAND, prevHeldItem);
             return Collections.emptyList();
         }
-        int fortune = EnchantmentHelper.getEnchantmentLevel(Enchantments.FORTUNE, stack);
+        int fortune = this.eap$enchantments.getOrDefault(Enchantments.FORTUNE, 0);
         List<ItemStack> drops = state.getBlock().getDrops(world, pos, state, fortune);
         float chance = ForgeEventFactory.fireBlockHarvesting(drops, world, pos, state, fortune, 1.0F, false, fakePlayer);
         fakePlayer.setHeldItem(EnumHand.MAIN_HAND, prevHeldItem);
@@ -84,6 +103,29 @@ public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilatio
             return drops;
         }
         return drops.stream().filter($ -> world.rand.nextFloat() <= chance).collect(Collectors.toList());
+    }
+
+
+    // TODO: GrS support for other enchants multipliers?
+    @Override
+    protected float calculateEnergyUsage(WorldServer world, BlockPos pos, List<ItemStack> items) {
+        float requiredEnergy = super.calculateEnergyUsage(world, pos, items);
+        int unbreakingLevel = this.eap$enchantments.getOrDefault(Enchantments.UNBREAKING, 0);
+        if (unbreakingLevel > 0 && world.rand.nextInt(EAPConfig.unbreakingRollFrom) < unbreakingLevel) {
+            return 0F;
+        }
+        if (this.eap$enchantments.containsKey(Enchantments.SILK_TOUCH)) {
+            requiredEnergy *= EAPConfig.silkTouchMultiplier;
+        }
+        int fortuneLevel = this.eap$enchantments.getOrDefault(Enchantments.FORTUNE, 0);
+        if (fortuneLevel > 0) {
+            requiredEnergy *= (fortuneLevel * EAPConfig.fortuneMultiplier);
+        }
+        int efficiencyLevel = this.eap$enchantments.getOrDefault(Enchantments.EFFICIENCY, 0);
+        if (efficiencyLevel > 0) {
+            requiredEnergy *= (float) (1.0F - (efficiencyLevel * EAPConfig.efficiencyPercentage));
+        }
+        return requiredEnergy;
     }
 
     @Override
@@ -100,6 +142,35 @@ public abstract class PartIdentityAnnihilationPlaneMixin extends PartAnnihilatio
             this.eap$accessor.eap$accepting(true);
             return this.eap$breakBlock(false);
         }
+    }
+
+    @Override
+    protected NBTTagCompound downloadSettings(SettingsFrom from) {
+        NBTTagCompound tag = super.downloadSettings(from);
+        if (from == SettingsFrom.DISMANTLE_ITEM) {
+            tag.setTag("ench", this.getItemStack().getEnchantmentTagList());
+        }
+        return tag;
+    }
+
+    @Override
+    public void uploadSettings(SettingsFrom from, NBTTagCompound output, EntityPlayer player) {
+        super.uploadSettings(from, output, player);
+        if (from == SettingsFrom.DISMANTLE_ITEM) {
+            this.getItemStack().setTagInfo("ench", output.getTagList("ench", 10));
+        }
+    }
+
+    @Override
+    public void writeToNBT(NBTTagCompound data) {
+        super.writeToNBT(data);
+        data.setTag("ench", this.getItemStack().getEnchantmentTagList());
+    }
+
+    @Override
+    public void readFromNBT(NBTTagCompound data) {
+        super.readFromNBT(data);
+        this.getItemStack().setTagInfo("ench", data.getTagList("ench", 10));
     }
 
     @Unique
